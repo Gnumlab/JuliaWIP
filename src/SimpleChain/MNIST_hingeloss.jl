@@ -157,6 +157,35 @@ end
 
 
 
+
+function full_train_unbatched_core!(
+  model::Flux.Chain,
+  pu::Ptr{UInt8},
+  g,
+  pX,
+  p,
+  opt,
+  iters::Int,
+  mpt
+)
+  chn = SimpleChains.getchain(model)  # Assume SimpleChains.Chain is equivalent to Flux.Chain
+  @unpack layers = chn
+  pen = SimpleChains.getpenalty(model)  # Assuming this function extracts penalty if any
+  sx = SimpleChains.static_size(pX)
+  optbuffer, pm = SimpleChains.optmemory(opt, p, pu)
+  GC.@preserve p g begin
+    for _ ∈ 1:iters
+      # println("Third my_train_unbatched_core!", i)
+      gs = Flux.gradient(ps) do
+        #ŷ = SimpleChains: need evaluate function that evaluetes chn on input x  
+        loss(ŷ, y)
+      end
+      SimpleChains.update!(gs, opt, pX, layers, pen, sx, p, pm, optbuffer, mpt)  # Assuming SimpleChains.update! updates the model weights
+    end
+  end
+end
+
+
 function my_train_unbatched_core!(
   c::SimpleChains.Chain,
   pu::Ptr{UInt8},
