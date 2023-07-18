@@ -154,14 +154,14 @@ ytest = ytrain1[1:5]
 
 
 # Calculate the expected accuracy
-num_correct = 0
+num_cor = 0
 for i in 1:length(ytest)
     yhat = argmax(lenet(xtest[:, :, :, i], p))
     if yhat == ytest[i]
-        num_correct += 1
+        num_cor += 1
     end
 end
-accuracy = num_correct / length(ytest)
+accuracy = num_cor / length(ytest)
 
 
 # Calculate the accuracy and loss using the SimpleChains function

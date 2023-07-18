@@ -1,26 +1,22 @@
 using SimpleChains
+using StaticArrays
 
-struct BinaryLogitCrossEntropyLoss{T,Y<:AbstractVector{T}} <: SimpleChains.AbstractLoss{T}
-    targets::Y
+struct BinaryLogitCrossEntropyLoss{T} <: SimpleChains.AbstractLoss{T}
+    target::T
 end
 
-SimpleChains.target(loss::BinaryLogitCrossEntropyLoss) = loss.targets
-(loss::BinaryLogitCrossEntropyLoss)(t::AbstractArray) = BinaryLogitCrossEntropyLoss(t)
-#(loss::BinaryLogitCrossEntropyLoss)(::Int) = loss
+target(loss::BinaryLogitCrossEntropyLoss) = loss.target
+(loss::BinaryLogitCrossEntropyLoss)(::Int) = loss
 
 function calculate_loss(loss::BinaryLogitCrossEntropyLoss, logits)
-    y = loss.targets
-    total_loss = zero(eltype(logits))
-    for i in eachindex(y)
-        p_i = inv(1 + exp(-logits[i]))
-        y_i = y[i]
-        total_loss -= y_i * log(p_i) + (1 - y_i) * (1 - log(p_i))
-    end
-    total_loss
+    y = loss.target
+    p = inv(1 + exp(-logits))
+    return -y * log(p) - (1 - y) * log(1 - p)
 end
+
 function (loss::BinaryLogitCrossEntropyLoss)(previous_layer_output::AbstractArray{T}, p::Ptr, pu) where {T}
-    total_loss = calculate_loss(loss, previous_layer_output)
-    total_loss, p, pu
+    total_loss = calculate_loss(loss, previous_layer_output[1])
+    return total_loss, p, pu
 end
 
 function SimpleChains.layer_output_size(::Val{T}, sl::BinaryLogitCrossEntropyLoss, s::Tuple) where {T}
@@ -54,7 +50,7 @@ end
 
 
 
-
+# Define the neural network model
 model = SimpleChain(
     static(2),
     TurboDense(tanh, 32),
@@ -62,18 +58,31 @@ model = SimpleChain(
     TurboDense(identity, 1)
 )
 
+# Create a data loader for the training data
 batch_size = 64
 X = rand(Float32, 2, batch_size)
 Y = rand(Bool, batch_size)
 
-parameters = SimpleChains.init_params(model);
-gradients = SimpleChains.alloc_threaded_grad(model);
+# Initialize the model parameters
+parameters = SimpleChains.init_params(model)
 
-# Add the loss like any other loss type
-model_loss = SimpleChains.add_loss(model, BinaryLogitCrossEntropyLoss(Y));
+# Create an ADAM optimizer
+learning_rate=3e-4
+opt = SimpleChains.ADAM(learning_rate)
 
-SimpleChains.valgrad!(gradients, model_loss, X, parameters)
+# Train the model for 10 epochs
+num_epochs = 10
+for epoch = 1:num_epochs
+    # Compute loss and gradients
+    loss_fun = SquaredLoss(Y)
+    gradients = SimpleChains.alloc_threaded_grad(model)
+    model_loss = SimpleChains.add_loss(model, loss_fun);
+    SimpleChains.valgrad!(gradients, model_loss, X, parameters)
 
-epochs = 100
-@time SimpleChains.train_unbatched!(gradients, parameters, model_loss, X, SimpleChains.ADAM(), 1:epochs); 
+    # Update the parameters using the ADAM optimizer
+    SimpleChains.update!(opt, parameters, gradients)
+end
 
+# Predict on new data
+X_new = rand(Float32, 2, 10)
+Y_pred = model(X_new, parameters)

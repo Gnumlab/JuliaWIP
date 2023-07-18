@@ -2,17 +2,16 @@ using MLDatasets
 using SimpleChains
 using NNlib
 using Random, Statistics
+using Parameters: @unpack
 
-
-
-struct StaticMulticlassLogitCrossEntropyLoss{T<:AbstractVector{<:Integer}} <: SimpleChains.AbstractLoss{T}
+struct MulticlassHingeLoss{T<:AbstractVector{<:Integer}} <: SimpleChains.AbstractLoss{T}
     targets::T
 end
 
-target(loss::StaticMulticlassLogitCrossEntropyLoss) = loss.targets
-(loss::StaticMulticlassLogitCrossEntropyLoss)(::Int) = loss
+SimpleChains.target(loss::MulticlassHingeLoss) = loss.targets
+(loss::MulticlassHingeLoss)(t::AbstractVector) = MulticlassHingeLoss(t)
 
-function calculate_loss(loss::StaticMulticlassLogitCrossEntropyLoss, logits)
+function calculate_loss(loss::MulticlassHingeLoss, logits)
     y = loss.targets
     total_loss = zero(eltype(logits))
     for i in eachindex(y)
@@ -26,23 +25,23 @@ function calculate_loss(loss::StaticMulticlassLogitCrossEntropyLoss, logits)
     total_loss
 end
 
-function (loss::StaticMulticlassLogitCrossEntropyLoss)(previous_layer_output::AbstractArray{T}, p::Ptr, pu) where {T}
+function (loss::MulticlassHingeLoss)(previous_layer_output::AbstractArray{T}, p::Ptr, pu) where {T}
     total_loss = calculate_loss(loss, previous_layer_output)
     total_loss, p, pu
 end
 
-function SimpleChains.layer_output_size(::Val{T}, sl::StaticMulticlassLogitCrossEntropyLoss, s::Tuple) where {T}
+function SimpleChains.layer_output_size(::Val{T}, sl::MulticlassHingeLoss, s::Tuple) where {T}
     SimpleChains._layer_output_size_no_temp(Val{T}(), sl, s)
 end
 
-function SimpleChains.forward_layer_output_size(::Val{T}, sl::StaticMulticlassLogitCrossEntropyLoss, s) where {T}
+function SimpleChains.forward_layer_output_size(::Val{T}, sl::MulticlassHingeLoss, s) where {T}
     SimpleChains._layer_output_size_no_temp(Val{T}(), sl, s)
 end
 
 function SimpleChains.chain_valgrad!(
     __,
     previous_layer_output::AbstractArray{T},
-    layers::Tuple{StaticMulticlassLogitCrossEntropyLoss},
+    layers::Tuple{MulticlassHingeLoss},
     _::Ptr,
     pu::Ptr{UInt8},
 ) where {T}
@@ -61,6 +60,89 @@ function SimpleChains.chain_valgrad!(
 
     return total_loss, previous_layer_output, pu
 end
+
+
+
+
+
+
+
+
+function my_train_unbatched_core!(
+  c::SimpleChains.Chain,
+  pu::Ptr{UInt8},
+  g,
+  pX,
+  p,
+  opt,
+  t::AbstractArray,
+  mpt
+)
+  chn = SimpleChains.getchain(c)
+  @unpack layers = chn
+  pen = SimpleChains.getpenalty(c)
+  fl = Base.front(layers)
+  ll = last(layers)
+  sx = static_size(pX)
+  optbuffer, pm = SimpleChains.optmemory(opt, p, pu)
+  GC.@preserve p g begin
+    for y ∈ t
+      layers_y = (fl..., ll(y))
+      SimpleChains.update!(g, opt, pX, layers_y, pen, sx, p, pm, optbuffer, mpt)
+    end
+  end
+end
+
+
+
+
+
+
+
+function my_train_unbatched!(
+  p::AbstractVector,
+  _chn::SimpleChains.Chain,
+  X::AbstractArray,
+  opt::SimpleChains.AbstractOptimizer,
+  t
+)
+  chn = SimpleChains.getchain(_chn)
+  pX = SimpleChains.maybe_static_size_arg(chn.inputdim, X)
+  optoff = SimpleChains.optmemsize(opt, p)
+  @unpack layers = chn
+  glen = _SimpleChains.try_static(numparam(chn), static_length(params))
+  numthreads = _numthreads()
+
+  T = Base.promote_eltype(p, X)
+  bytes_per_thread, total_bytes = SimpleChains.required_bytes(
+    Val{T}(),
+    layers,
+    static_size(pX),
+    optoff + align(glen) * numthreads,
+    static(0),
+    numthreads
+  )
+  GC.@preserve X begin
+    with_memory(
+      my_train_unbatched_core!,
+      _chn,
+      total_bytes,
+      pX,
+      p,
+      opt,
+      t,
+      bytes_per_thread
+    )
+  end
+  p
+end
+
+
+
+
+
+
+
 
 
 
@@ -95,8 +177,8 @@ n = length(ytrain1)
 
 
 # Reduce the dataset to the selected examples
-xtrain4 = xtrain4[:, :, :, 1:2:1000]
-ytrain1 = ytrain1[1:2:1000]
+xtrain4 = xtrain4[:, :, :, 1:2:2000]
+ytrain1 = ytrain1[1:2:2000]
 
 # Print the size of the reduced dataset
 println("Size of reduced dataset: $(size(xtrain4, 4)) examples")
@@ -124,26 +206,30 @@ else
 end
 
 # Define the loss function for the model and input data
-loss_fn = StaticMulticlassLogitCrossEntropyLoss(ytrain1)
+loss_fn = MulticlassHingeLoss(ytrain1)
 
 println("loss")
 
 # Add the loss function to the model
-lenetloss = SimpleChains.add_loss(lenet, loss_fn)
+lenetloss = SimpleChains.add_loss(lenet, LogitCrossEntropyLoss(ytrain1));
+#lenetloss = SimpleChains.add_loss(lenet, loss_fn)
 
 println("lenetloss")
 # Initialize the parameters of the model
 p = SimpleChains.init_params(lenet, size(xtrain4))
 G = SimpleChains.alloc_threaded_grad(lenetloss);
 
-println("before valgrad")
+println("ini params")
 
-SimpleChains.valgrad!(G, lenetloss, xtrain4, p)
+#SimpleChains.valgrad!(G, lenetloss, xtrain4, p)
 
-xtest = xtrain4[:, :, :, 1:5]
-ytest = ytrain1[1:5]
+println("valgrad")
 
-loss = -mean(log.(exp.(lenet(xtest, p)) ./ sum(exp.(lenet(xtest, p)); dims=1)), dims=2)[1]
+@time my_train_unbatched!(G, p, lenetloss, xtrain4, SimpleChains.ADAM(3e-4), 1);
+#SimpleChains.accuracy_and_loss(lenetloss, xtrain4, p)
+SimpleChains.accuracy_and_loss(lenetloss, xtest4, ytest1, p)
+
+
 
 
 #SimpleChains.accuracy_and_loss(lenetloss, xtrain4, p)

@@ -7,8 +7,10 @@ struct StaticMulticlassLogitCrossEntropyLoss{T<:AbstractVector{<:Integer}} <: Si
     targets::T
 end
 
-target(loss::StaticMulticlassLogitCrossEntropyLoss) = loss.targets
-(loss::StaticMulticlassLogitCrossEntropyLoss)(::Int) = loss
+
+SimpleChains.target(loss::StaticMulticlassLogitCrossEntropyLoss) = loss.targets
+(loss::StaticMulticlassLogitCrossEntropyLoss)(t::AbstractArray) = StaticMulticlassLogitCrossEntropyLoss(t)
+
 
 function calculate_loss(loss::StaticMulticlassLogitCrossEntropyLoss, logits)
     y = loss.targets
@@ -20,7 +22,7 @@ function calculate_loss(loss::StaticMulticlassLogitCrossEntropyLoss, logits)
         y_i = (y[i] - 1) * 10
                 if y_i+10 > length(p)
             # Handle out-of-bounds error
-            error("Index out of bounds: y_i = $y_i, length(p) = $(length(p))")
+            continue;#error("Index out of bounds: y_i = $y_i, length(p) = $(length(p))")
         end
         total_loss -= sum(log.(p[y_i+1:y_i+10] .+ c)) - log(10*c)
     end
@@ -86,6 +88,10 @@ xtest4 = reshape(xtest3, 28, 28, 1, :)
 ytrain1 = UInt32.(ytrain0 .+ 1)
 ytest1 = UInt32.(ytest0 .+ 1)
 
+# Reduce the dataset to the selected examples
+xtrain4 = xtrain4[:, :, :, 1:2:1000]
+ytrain1 = ytrain1[1:2:1000]
+
 # Print examples in ytrain1 that are outside the range of 0 to 9
 train_out_of_range = findall(x -> !(1 <= x <= 10), ytrain1)
 if !isempty(train_out_of_range)
@@ -126,4 +132,4 @@ println("before valgrad")
 SimpleChains.valgrad!(G, lenetloss, xtrain4, p)
 
 # Train the model using the added loss function
-#@time SimpleChains.train_batched!(G, p, lenetloss, xtrain4, SimpleChains.ADAM(3e-4), 10)
+@time SimpleChains.train_unbatched!(G, p, lenetloss, xtrain4, SimpleChains.ADAM(3e-4), 1)
