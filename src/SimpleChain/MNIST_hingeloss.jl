@@ -137,6 +137,96 @@ function my_train_unbatched!(
   p
 end
 
+function my_train_unbatched_core!(
+  c::SimpleChains.Chain,
+  pu::Ptr{UInt8},
+  pX,
+  it,
+  p::AbstractVector{T},
+  opt,
+  mpt
+) where {T}
+  numthreads = _SimpleChains.numthreads()
+  glen = _SimpleChains.try_static(numparam(getchain(c)), static_length(params))
+  aligned_glen = SimpleChains.align(glen)
+  g = _alloc_grad(Ptr{T}(pu), glen, numthreads, aligned_glen)
+  offset = SimpleChains.static_sizeof(T) * aligned_glen * numthreads
+  SimpleChains.train_unbatched_core!(c, pu + offset, g, pX, it, p, opt, mpt)
+end
+
+
+
+
+function my_train_unbatched_core!(
+  c::SimpleChains.Chain,
+  pu::Ptr{UInt8},
+  g,
+  pX,
+  p,
+  opt,
+  iters::Int,
+  mpt
+)
+  println("Third my_train_unbatched_core!")
+  chn = SimpleChains.getchain(c)
+  @unpack layers = chn
+  pen = SimpleChains.getpenalty(c)
+  sx = SimpleChains.static_size(pX)
+  optbuffer, pm = SimpleChains.optmemory(opt, p, pu)
+  GC.@preserve p g begin
+    for _ ∈ 1:iters
+      #println("Third my_train_unbatched_core!", i)
+      SimpleChains.update!(g, opt, pX, layers, pen, sx, p, pm, optbuffer, mpt)
+    end
+  end
+end
+
+
+function my_train_unbatched!(
+  g,
+  p::AbstractVector,
+  _chn::SimpleChains.Chain,
+  X,
+  opt::SimpleChains.AbstractOptimizer,
+  t
+)
+
+  println("Second my_train_unbatched!")
+  if g isa AbstractMatrix && SimpleChains.static_size(g, static(2)) == 1
+    gpb = preserve_buffer(g)
+    gv = PtrArray(pointer(g), (length(p),))
+    GC.@preserve gpb my_train_unbatched!(gv, p, _chn, X, opt, t)
+    return p
+  end
+
+  chn = SimpleChains.getchain(_chn)
+  pX = SimpleChains.maybe_static_size_arg(chn.inputdim, X)
+  optoff = SimpleChains.optmemsize(opt, p)
+  @unpack layers = chn
+  T = Base.promote_eltype(p, X)
+  bytes_per_thread, total_bytes = SimpleChains.required_bytes(
+    Val{T}(),
+    layers,
+    SimpleChains.static_size(pX),
+    optoff,
+    static(0),
+    SimpleChains.static_size(g, static(2))
+  )
+  GC.@preserve X begin
+    SimpleChains.with_memory(
+      my_train_unbatched_core!,
+      _chn,
+      total_bytes,
+      g,
+      pX,
+      p,
+      opt,
+      t,
+      bytes_per_thread
+    )
+  end
+  p
+end
 
 
 
