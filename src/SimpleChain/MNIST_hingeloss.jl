@@ -176,7 +176,7 @@ function full_train_unbatched_core!(
   GC.@preserve p g begin
     for _ ∈ 1:iters
       # println("Third my_train_unbatched_core!", i)
-      gs = Flux.gradient(ps) do
+      gs = SimpleChains.valgrad!(g, lenetloss, xtrain4, p) do
         #ŷ = SimpleChains: need evaluate function that evaluetes chn on input x  
         loss(ŷ, y)
       end
@@ -338,6 +338,8 @@ println("lenetloss")
 p = SimpleChains.init_params(lenet, size(xtrain4))
 G = SimpleChains.alloc_threaded_grad(lenetloss);
 
+
+
 println("ini params")
 
 #SimpleChains.valgrad!(G, lenetloss, xtrain4, p)
@@ -348,7 +350,8 @@ println("valgrad")
 #SimpleChains.accuracy_and_loss(lenetloss, xtrain4, p)
 SimpleChains.accuracy_and_loss(lenetloss, xtest4, ytest1, p)
 
-
+lenet(xtest4, p)
+#SimpleChains.remove_loss(lenet)
 
 
 #SimpleChains.accuracy_and_loss(lenetloss, xtrain4, p)

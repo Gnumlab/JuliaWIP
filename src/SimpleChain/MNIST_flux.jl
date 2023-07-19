@@ -15,6 +15,10 @@ xtrain, ytrain = get_data(:train)
 img_size = Base.front(size(xtrain))
 xtest, ytest = get_data(:test)
 
+# Reduce the dataset to the selected examples
+xtrain = xtrain[:, :, :, 1:2:5000]
+ytrain = ytrain[1:2:5000]
+
 # Training parameters
 num_image_classes = 10
 learning_rate = 3e-4
@@ -26,52 +30,7 @@ function display_loss(accuracy, loss)
   @printf("    training accuracy %.2f, loss %.4f\n", 100 * accuracy, loss)
 end
 
-# SimpleChains implementation
-begin
-  using SimpleChains
 
-  lenet = SimpleChain(
-    (static(28), static(28), static(1)),
-    SimpleChains.Conv(SimpleChains.relu, (5, 5), 6),
-    SimpleChains.MaxPool(2, 2),
-    SimpleChains.Conv(SimpleChains.relu, (5, 5), 16),
-    SimpleChains.MaxPool(2, 2),
-    Flatten(3),
-    TurboDense(SimpleChains.relu, 120),
-    TurboDense(SimpleChains.relu, 84),
-    TurboDense(identity, num_image_classes)
-  )
-  lenetloss = SimpleChains.add_loss(lenet, LogitCrossEntropyLoss(ytrain))
-
-  for i = 1:2
-    println("SimpleChains run #$i")
-    @time "  gradient buffer allocation" G =
-      SimpleChains.alloc_threaded_grad(lenetloss)
-    @time "  parameter initialization" p = SimpleChains.init_params(lenet)
-    #@time "  forward pass" lenet(xtrain, p)
-
-    #g = similar(p);
-    #@time "  valgrad!" valgrad!(g, lenetloss, xtrain, p)
-
-    opt = SimpleChains.ADAM(learning_rate)
-    @time "  train $(num_epochs) epochs" SimpleChains.train_batched!(
-      G,
-      p,
-      lenetloss,
-      xtrain,
-      opt,
-      num_epochs
-    )
-
-    @time "  compute training accuracy and loss" train_acc, train_loss =
-      SimpleChains.accuracy_and_loss(lenetloss, xtrain, ytrain, p)
-    display_loss(train_acc, train_loss)
-
-    @time "  compute test accuracy and loss" test_acc, test_loss =
-      SimpleChains.accuracy_and_loss(lenetloss, xtest, ytest, p)
-    display_loss(test_acc, test_loss)
-  end
-end
 
 # Flux implementation
 begin
@@ -80,20 +39,19 @@ begin
   using Flux.Optimise: Optimiser, WeightDecay
   using Flux: onehotbatch, onecold
   using Flux.Losses: logitcrossentropy
+  using Flux.Losses: hinge_loss
   using Statistics, Random
-  using CUDA
+  using StaticArrays
 
+
+  batchsize = 0
+ 
   use_cuda = false #CUDA.functional()
   batchsize = 0
-  device = if use_cuda
-    @info "Flux training on GPU"
-    batchsize = 2048
-    gpu
-  else
-    @info "Flux training on CPU"
-    batchsize = 96 * Threads.nthreads()
-    cpu
-  end
+  device = cpu
+  batchsize = 16 * Threads.nthreads()
+
+
 
   function create_loader(x, y, batch_size, shuffle)
     y = onehotbatch(y, 1:num_image_classes)
@@ -122,8 +80,8 @@ begin
     ) |> device
   end
 
-  loss(ŷ, y) = logitcrossentropy(ŷ, y)
-
+  #loss(ŷ, y) = logitcrossentropy(ŷ, y)
+  loss(ŷ, y) = hinge_loss(ŷ, y)
   function eval_loss_accuracy(loader, model, device)
     l = 0.0f0
     acc = 0
@@ -137,6 +95,92 @@ begin
     end
     return (acc = acc / ntot, loss = l / ntot)
   end
+  
+  
+  # Pre-allocate the array with an upper bound size (e.g., maximum number of data points in the dataset)
+max_possible_data = 10000
+#non_zero_loss_data = Vector{Tuple{AbstractArray, AbstractArray}}(undef, max_possible_data)
+non_zero_loss_data = Vector{Tuple{Array{Float32, 4}, Array{Float32, 2}}}(undef, max_possible_data)
+
+
+  function my_fast_train!(model, train_loader, opt)
+    ps = Flux.params(model)
+    
+    actual_num_non_zero_loss_data = 0
+    for epoch = 1:num_epochs
+        actual_num_non_zero_loss_data = 0
+        for (x, y) in train_loader
+            x = device(x)
+            y = device(y)
+            loss_val = loss(model(x), y)
+            if loss_val != 0
+                actual_num_non_zero_loss_data += 1
+                non_zero_loss_data[actual_num_non_zero_loss_data] = (x, y)
+            end
+        end
+
+#        if actual_num_non_zero_loss_data == 0
+#            println("No non-zero loss data in epoch $epoch.")
+#            continue
+#        end
+#        println(actual_num_non_zero_loss_data)
+
+        # Remove unnecessary computations
+        non_zero_loss_data_batched = @view(non_zero_loss_data[1:actual_num_non_zero_loss_data])
+        
+        # Simplify batching process using loop
+        x_batch = cat([non_zero_loss_data_batched[i][1] for i in 1:actual_num_non_zero_loss_data]..., dims=4) |> device
+        y_batch = hcat([non_zero_loss_data_batched[i][2] for i in 1:actual_num_non_zero_loss_data]...) |> device
+
+        
+        non_zero_loss_loader = DataLoader((x_batch, y_batch), batchsize=batchsize, shuffle=true)
+
+        for (x, y) in non_zero_loss_loader
+            gs = Flux.gradient(ps) do
+                ŷ = model(x)
+                loss(ŷ, y)
+            end
+            Flux.Optimise.update!(opt, ps, gs)
+        end
+    end
+  end
+
+  
+  
+  
+  function my_train!(model, train_loader, opt)
+    ps = Flux.params(model)
+    for epoch = 1:num_epochs
+        non_zero_loss_data = []
+        for (x, y) in train_loader
+            x = device(x)
+            y = device(y)
+            loss_val = loss(model(x), y)
+            if loss_val != 0
+                push!(non_zero_loss_data, (x, y))
+            end
+        end
+        if isempty(non_zero_loss_data)
+            println("No non-zero loss data in epoch $epoch.")
+            continue
+        end
+        x_batch = cat([non_zero_loss_data[i][1] for i in 1:length(non_zero_loss_data)]..., dims=4)
+        y_batch = hcat([non_zero_loss_data[i][2] for i in 1:length(non_zero_loss_data)]...)
+        non_zero_loss_loader = DataLoader((x_batch, y_batch), batchsize=batchsize, shuffle=true)
+        
+        for (x, y) in non_zero_loss_loader
+            gs = Flux.gradient(ps) do
+                ŷ = model(x)
+                loss(ŷ, y)
+            end
+            Flux.Optimise.update!(opt, ps, gs)
+        end
+    end
+  end
+
+
+
+
 
   function train!(model, train_loader, opt)
     ps = Flux.params(model)
@@ -153,16 +197,71 @@ begin
     end
   end
 
+
+
+
+  println("\n\n\n============================== MY TRAIN ==============================")
   for run = 1:2
-    println("Flux run #$run")
+    println("Flux my_train! #$run")
+    @time "  create model" model = LeNet5()
+    opt = ADAM(learning_rate)
+    @time "  train $num_epochs epochs" my_train!(model, train_loader, opt)
+    #@time "  compute training loss" train_acc, train_loss =
+    #  eval_loss_accuracy(test_loader, model, device)
+    #display_loss(train_acc, train_loss)
+    #@time "  compute test loss" test_acc, test_loss =
+    #  eval_loss_accuracy(train_loader, model, device)
+    #display_loss(test_acc, test_loss)
+  end
+  
+  println("\n\n\n============================== MY FAST TRAIN ==============================")
+  for run = 1:2
+    println("Flux my_train! #$run")
+    @time "  create model" model = LeNet5()
+    opt = ADAM(learning_rate)
+    @time "  train $num_epochs epochs" my_fast_train!(model, train_loader, opt)
+    #@time "  compute training loss" train_acc, train_loss =
+    #  eval_loss_accuracy(test_loader, model, device)
+    #display_loss(train_acc, train_loss)
+    #@time "  compute test loss" test_acc, test_loss =
+    #  eval_loss_accuracy(train_loader, model, device)
+    #display_loss(test_acc, test_loss)
+  end
+  
+    println("\n\n\n============================== TRAIN ==============================")
+  for run = 1:2
+    println("Flux train! #$run")
     @time "  create model" model = LeNet5()
     opt = ADAM(learning_rate)
     @time "  train $num_epochs epochs" train!(model, train_loader, opt)
-    @time "  compute training loss" train_acc, train_loss =
-      eval_loss_accuracy(test_loader, model, device)
-    display_loss(train_acc, train_loss)
-    @time "  compute test loss" test_acc, test_loss =
-      eval_loss_accuracy(train_loader, model, device)
-    display_loss(test_acc, test_loss)
+    #@time "  compute training loss" train_acc, train_loss =
+    #  eval_loss_accuracy(test_loader, model, device)
+    #display_loss(train_acc, train_loss)
+    #@time "  compute test loss" test_acc, test_loss =
+    #  eval_loss_accuracy(train_loader, model, device)
+    #display_loss(test_acc, test_loss)
   end
+  
 end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
