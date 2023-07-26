@@ -66,7 +66,7 @@ end
 
 
 
-
+#Functions taken from SimpleChains
 
 function my_train_unbatched_core!(
   c::SimpleChains.Chain,
@@ -159,7 +159,7 @@ end
 
 
 function full_train_unbatched_core!(
-  model::Flux.Chain,
+  model::SimpleChains.Chain,
   pu::Ptr{UInt8},
   g,
   pX,

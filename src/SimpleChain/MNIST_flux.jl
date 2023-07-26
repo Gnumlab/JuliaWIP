@@ -43,7 +43,6 @@ begin
   using Statistics, Random
   using StaticArrays
 
-
   batchsize = 0
  
   use_cuda = false #CUDA.functional()
@@ -98,26 +97,44 @@ begin
   
   
   # Pre-allocate the array with an upper bound size (e.g., maximum number of data points in the dataset)
-max_possible_data = 10000
-#non_zero_loss_data = Vector{Tuple{AbstractArray, AbstractArray}}(undef, max_possible_data)
-non_zero_loss_data = Vector{Tuple{Array{Float32, 4}, Array{Float32, 2}}}(undef, max_possible_data)
+  max_possible_data = 10000
+  #non_zero_loss_data = Vector{Tuple{AbstractArray, AbstractArray}}(undef, max_possible_data)
+  non_zero_loss_data = Vector{Tuple{Array{Float32, 4}, Array{Float32, 2}}}(undef, max_possible_data)
 
+
+  function fill_non_zero_loss_data(model, train_loader)
+    actual_num_non_zero_loss_data = 0
+    count = 0
+    for (x, y) in train_loader
+        x = device(x)
+        y = device(y)
+        loss_val = loss(model(x), y)
+        if loss_val != 0
+            actual_num_non_zero_loss_data += 1
+            non_zero_loss_data[actual_num_non_zero_loss_data] = (x, y)
+            count += 1
+        end
+    end
+    println(count)
+    return actual_num_non_zero_loss_data
+  end
+
+  function do_gradient(model, ps, non_zero_loss_loader, opt)
+    for (x, y) in non_zero_loss_loader
+      gs = Flux.gradient(ps) do
+          ŷ = model(x)
+          loss(ŷ, y)
+      end
+      Flux.Optimise.update!(opt, ps, gs)
+    end
+  end
 
   function my_fast_train!(model, train_loader, opt)
     ps = Flux.params(model)
     
     actual_num_non_zero_loss_data = 0
     for epoch = 1:num_epochs
-        actual_num_non_zero_loss_data = 0
-        for (x, y) in train_loader
-            x = device(x)
-            y = device(y)
-            loss_val = loss(model(x), y)
-            if loss_val != 0
-                actual_num_non_zero_loss_data += 1
-                non_zero_loss_data[actual_num_non_zero_loss_data] = (x, y)
-            end
-        end
+        @time actual_num_non_zero_loss_data = fill_non_zero_loss_data(model, train_loader)
 
 #        if actual_num_non_zero_loss_data == 0
 #            println("No non-zero loss data in epoch $epoch.")
@@ -135,13 +152,8 @@ non_zero_loss_data = Vector{Tuple{Array{Float32, 4}, Array{Float32, 2}}}(undef, 
         
         non_zero_loss_loader = DataLoader((x_batch, y_batch), batchsize=batchsize, shuffle=true)
 
-        for (x, y) in non_zero_loss_loader
-            gs = Flux.gradient(ps) do
-                ŷ = model(x)
-                loss(ŷ, y)
-            end
-            Flux.Optimise.update!(opt, ps, gs)
-        end
+        @time do_gradient(model, ps, non_zero_loss_loader, opt)
+        
     end
   end
 
@@ -185,7 +197,7 @@ non_zero_loss_data = Vector{Tuple{Array{Float32, 4}, Array{Float32, 2}}}(undef, 
   function train!(model, train_loader, opt)
     ps = Flux.params(model)
     for _ = 1:num_epochs
-      for (x, y) in train_loader
+      @time for (x, y) in train_loader
         x = device(x)
         y = device(y)
         gs = Flux.gradient(ps) do
@@ -202,10 +214,13 @@ non_zero_loss_data = Vector{Tuple{Array{Float32, 4}, Array{Float32, 2}}}(undef, 
 
   println("\n\n\n============================== MY TRAIN ==============================")
   for run = 1:2
+    #=
     println("Flux my_train! #$run")
     @time "  create model" model = LeNet5()
     opt = ADAM(learning_rate)
     @time "  train $num_epochs epochs" my_train!(model, train_loader, opt)
+    =#
+
     #@time "  compute training loss" train_acc, train_loss =
     #  eval_loss_accuracy(test_loader, model, device)
     #display_loss(train_acc, train_loss)
