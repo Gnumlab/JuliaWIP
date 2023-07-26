@@ -1,0 +1,5 @@
+[deps]
+MLDatasets = "eb30cadb-4394-5ae3-aed4-317e484a6458"
+NNlib = "872c559c-99b0-510c-b3b7-b6c96a88d5cd"
+Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
+SimpleChains = "de6bee2f-e2f4-4ec7-b6ed-219cc6f6e9e5"
