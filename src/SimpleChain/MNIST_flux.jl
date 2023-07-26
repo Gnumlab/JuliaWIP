@@ -16,8 +16,9 @@ img_size = Base.front(size(xtrain))
 xtest, ytest = get_data(:test)
 
 # Reduce the dataset to the selected examples
-xtrain = xtrain[:, :, :, 1:2:5000]
-ytrain = ytrain[1:2:5000]
+n_examples = 8000
+xtrain = xtrain[:, :, :, 1:1:n_examples]
+ytrain = ytrain[1:1:n_examples]
 
 # Training parameters
 num_image_classes = 10
@@ -48,7 +49,7 @@ begin
   use_cuda = false #CUDA.functional()
   batchsize = 0
   device = cpu
-  batchsize = 16 * Threads.nthreads()
+  batchsize = 1 * Threads.nthreads()
 
 
 
@@ -79,8 +80,8 @@ begin
     ) |> device
   end
 
-  #loss(ŷ, y) = logitcrossentropy(ŷ, y)
-  loss(ŷ, y) = hinge_loss(ŷ, y)
+  loss(ŷ, y) = logitcrossentropy(ŷ, y)
+  #loss(ŷ, y) = hinge_loss(ŷ, y)
   function eval_loss_accuracy(loader, model, device)
     l = 0.0f0
     acc = 0
@@ -105,17 +106,32 @@ begin
   function fill_non_zero_loss_data(model, train_loader)
     actual_num_non_zero_loss_data = 0
     count = 0
+    count2 = 0
+    max = 0
+    min = 100
     for (x, y) in train_loader
         x = device(x)
         y = device(y)
+
         loss_val = loss(model(x), y)
-        if loss_val != 0
+        #println(model(x), " --- ", y, " ------- ", typeof(model(x)), " --- ", typeof(y))
+        count2 += 1
+        if loss_val > 0.05
             actual_num_non_zero_loss_data += 1
             non_zero_loss_data[actual_num_non_zero_loss_data] = (x, y)
             count += 1
         end
+
+
+        if loss_val > max
+
+          max = loss_val
+        end
+        if loss_val < min
+          min = loss_val
+        end
     end
-    println(count)
+    println(max, " ", min, " ", count, " ", count2)
     return actual_num_non_zero_loss_data
   end
 
@@ -136,6 +152,9 @@ begin
     for epoch = 1:num_epochs
         @time actual_num_non_zero_loss_data = fill_non_zero_loss_data(model, train_loader)
 
+        if actual_num_non_zero_loss_data == 0
+          return
+        end
 #        if actual_num_non_zero_loss_data == 0
 #            println("No non-zero loss data in epoch $epoch.")
 #            continue
@@ -234,13 +253,13 @@ begin
     println("Flux my_train! #$run")
     @time "  create model" model = LeNet5()
     opt = ADAM(learning_rate)
-    @time "  train $num_epochs epochs" my_fast_train!(model, train_loader, opt)
-    #@time "  compute training loss" train_acc, train_loss =
-    #  eval_loss_accuracy(test_loader, model, device)
-    #display_loss(train_acc, train_loss)
-    #@time "  compute test loss" test_acc, test_loss =
-    #  eval_loss_accuracy(train_loader, model, device)
-    #display_loss(test_acc, test_loss)
+    @time "  ======================================== TRAIN $num_epochs epochs" my_fast_train!(model, train_loader, opt)
+    @time "  compute training loss" train_acc, train_loss =
+      eval_loss_accuracy(test_loader, model, device)
+    display_loss(train_acc, train_loss)
+    @time "  compute test loss" test_acc, test_loss =
+      eval_loss_accuracy(train_loader, model, device)
+    display_loss(test_acc, test_loss)
   end
   
     println("\n\n\n============================== TRAIN ==============================")
@@ -248,13 +267,13 @@ begin
     println("Flux train! #$run")
     @time "  create model" model = LeNet5()
     opt = ADAM(learning_rate)
-    @time "  train $num_epochs epochs" train!(model, train_loader, opt)
-    #@time "  compute training loss" train_acc, train_loss =
-    #  eval_loss_accuracy(test_loader, model, device)
-    #display_loss(train_acc, train_loss)
-    #@time "  compute test loss" test_acc, test_loss =
-    #  eval_loss_accuracy(train_loader, model, device)
-    #display_loss(test_acc, test_loss)
+    @time " ======================================== TRAIN $num_epochs epochs" train!(model, train_loader, opt)
+    @time "  compute training loss" train_acc, train_loss =
+      eval_loss_accuracy(test_loader, model, device)
+    display_loss(train_acc, train_loss)
+    @time "  compute test loss" test_acc, test_loss =
+      eval_loss_accuracy(train_loader, model, device)
+    display_loss(test_acc, test_loss)
   end
   
 end
