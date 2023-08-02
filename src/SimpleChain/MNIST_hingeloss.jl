@@ -71,7 +71,7 @@ end
 
 #Functions taken from SimpleChains
 
-function my_update!(
+function _my_update!(
   g::AbstractMatrix{T},
   opt,
   Xp::AbstractArray{<:Any,N},
@@ -107,10 +107,121 @@ function my_update!(
 end
 
 
+function my_update!(
+  g::AbstractMatrix{T},
+  opt,
+  Xp::AbstractArray{<:Any,N},
+  layers,
+  pen,
+  sx,
+  p,
+  pm,
+  optbuffer,
+  mpt
+) where {T,N}
+  println("my_update! ")
+
+  nthread = SimpleChains.static_size(g, static(2))
+  Xpb = SimpleChains.preserve_buffer(Xp)
+  Xpp = SimpleChains.PtrArray(Xp)
+  loss = last(layers)
+  tgt = SimpleChains.target(loss)
+  tgtpb = SimpleChains.preserve_buffer(tgt)
+  newlayers = (Base.front(layers)..., loss(SimpleChains.PtrArray(tgt)))
+  println("my_update! befo GC.@preserve Polyester")
+
+  GC.@preserve Xpb tgtpb begin
+    SimpleChains.Polyester.batch(
+      SimpleChains.chain_valgrad_thread!,
+      (nthread, nthread),
+      g,
+      Xpp,
+      newlayers,
+      p,
+      pm,
+      mpt
+    )
+  end
+  println("my_update! befor turbo")
+
+  SimpleChains.@turbo for t = 2:nthread, i in axes(g, 1)
+    g[i, 1] += g[i, t]
+  end
+  gpb = SimpleChains.preserve_buffer(g)
+  println("my_update! befor apply_penalty")
+  GC.@preserve g p SimpleChains.chain_valgrad_entry!(pointer(g), Xp, layers, pointer(p), pm)
+
+  GC.@preserve gpb begin
+    gv = SimpleChains.PtrArray(pointer(g), (length(p),))
+    SimpleChains.apply_penalty!(gv, pen, p, sx)
+    gmul = loss_multiplier(loss, SimpleChains.static_size(Xp, static(N)), T)
+    println("call simplechains update! ")
+
+    SimpleChains.update!(opt, optbuffer, p, gv, gmul)
+  end
+end
+
+
+
+function good_my_update!(
+  g::AbstractVector{T},
+  opt,
+  Xp::AbstractArray{<:Any,N},
+  layers,
+  pen,
+  sx,
+  p,
+  pm,
+  optbuffer,
+  _
+) where {T,N}
+  println("good_my_update!")
+
+  GC.@preserve g p SimpleChains.chain_valgrad_entry!(pointer(g), Xp, layers, pointer(p), pm)
+  println("good_my_update!")
+
+  SimpleChains.apply_penalty!(g, pen, p, sx)
+  println("good_my_update!")
+
+  println("good_my_update!")
+  gmul = SimpleChains.loss_multiplier(last(layers), SimpleChains.static_size(Xp, static(N)), T)
+  println("good_my_update! before update")
+  SimpleChains.update!(opt, optbuffer, p, g, gmul)
+end
 
 
 
 
+
+
+
+function single_train_unbatched_core!(
+  model::SimpleChains.Chain,
+  pu::Ptr{UInt8},
+  g,
+  pX,
+  pY, #added code
+  p,
+  opt,
+  mpt, 
+  X
+)
+
+
+  println("single_train_unbatched_core!")
+
+  chn = SimpleChains.getchain(model)  # Assume SimpleChains.Chain is equivalent to Flux.Chain
+  @unpack layers = chn
+  pen = SimpleChains.getpenalty(model)  # SimpleChains.Assuming this function extracts penalty if any
+  sx = SimpleChains.static_size(pX)
+  optbuffer, pm = SimpleChains.optmemory(opt, p, pu)
+  GC.@preserve p g begin
+    println("before update")
+#      good_my_update!(g, opt, pX1, layers, pen, sx1, p, pm, optbuffer, mpt) 
+    good_my_update!(g, opt, pX, layers, pen, sx, p, pm, optbuffer, pu) 
+    
+  end
+end
 
 function full_train_unbatched_core!(
   model::SimpleChains.Chain,
@@ -130,13 +241,13 @@ function full_train_unbatched_core!(
 
   chn = SimpleChains.getchain(model)  # Assume SimpleChains.Chain is equivalent to Flux.Chain
   @unpack layers = chn
-  pen = SimpleChains.getpenalty(model)  # Assuming this function extracts penalty if any
+  pen = SimpleChains.getpenalty(model)  # SimpleChains.Assuming this function extracts penalty if any
   sx = SimpleChains.static_size(pX)
   optbuffer, pm = SimpleChains.optmemory(opt, p, pu)
   GC.@preserve p g begin
     for i ∈ 1:iters   #iters are actually the number of epochs 
       println("full_my_train_unbatched_core! iteration: ", i)
-      SimpleChains.valgrad!(g, model, pX, p)
+      #SimpleChains.valgrad!(g, model, pX, p)
 
 
       actual_num_non_zero_loss_data = 0
@@ -147,50 +258,57 @@ function full_train_unbatched_core!(
         #SimpleChains.valgrad!(g, model, pX, p) do
         ŷ = model(X, p)  # SimpleChains: need evaluate function that evaluetes chn on input x  
         loss_val = Flux.Losses.hinge_loss(ŷ, y)
-        if loss_val != 0
+        #loss_val = Flux.Losses.logitcrossentropy(ŷ, y)
+        println(loss_val)
+        if loss_val < 1.0
           actual_num_non_zero_loss_data += 1
           non_zero_loss_data[:, :, :, actual_num_non_zero_loss_data] .= x
         end
       end
     
       # Remove unnecessary computations
-      non_zero_loss_data = non_zero_loss_data[:, :, :, 1:actual_num_non_zero_loss_data]
-      println(typeof(non_zero_loss_data))
-      println(typeof(X))
+      println(actual_num_non_zero_loss_data)
+      non_zero_loss_data1 =  non_zero_loss_data[:, :, :, 1:actual_num_non_zero_loss_data]
+      
 
       # Create an array `pX` to store the non-zero examples
-      pX1 = SimpleChains.maybe_static_size_arg(chn.inputdim, non_zero_loss_data)
-      println(typeof(pX1))
-      println(typeof(pX))
-      SimpleChains.update!(g, opt, pX1, layers, pen, sx, p, pm, optbuffer, mpt)  # Assuming SimpleChains.update! updates the model weights
+      pX1 = SimpleChains.maybe_static_size_arg(chn.inputdim, non_zero_loss_data1)   
+
+      optoff = SimpleChains.optmemsize(opt, p)
+      @unpack layers = chn
+      T = Base.promote_eltype(p, non_zero_loss_data1)
+      bytes_per_thread, total_bytes = SimpleChains.required_bytes(    
+        Val{T}(),
+        layers,
+        SimpleChains.static_size(pX1),
+        optoff,
+        static(0),
+        SimpleChains.static_size(g, static(2))
+      )
+   
+
+      println("call single ")
+
+#      good_my_update!(g, opt, pX1, layers, pen, sx1, p, pm, optbuffer, mpt) 
+      GC.@preserve X begin
+        SimpleChains.with_memory(
+          single_train_unbatched_core!,
+          model,
+          total_bytes,
+          g,
+          pX1,
+          pY,  #added code for full_train_unbatched_core
+          p,
+          opt,
+          bytes_per_thread, 
+          X
+        )
+      end
     end
   end
 end
 
 
-function my_train_unbatched_core!(
-  c::SimpleChains.Chain,
-  pu::Ptr{UInt8},
-  g,
-  pX,
-  p,
-  opt,
-  iters::Int,
-  mpt
-)
-  println("my_train_unbatched_core!")
-  chn = SimpleChains.getchain(c)
-  @unpack layers = chn
-  pen = SimpleChains.getpenalty(c)
-  sx = SimpleChains.static_size(pX)
-  optbuffer, pm = SimpleChains.optmemory(opt, p, pu)
-  GC.@preserve p g begin
-    for i ∈ 1:iters
-      println("my_train_unbatched_core! ", i)
-      my_update!(g, opt, pX, layers, pen, sx, p, pm, optbuffer, mpt)
-    end
-  end
-end
 
 
 function my_train_unbatched!(
@@ -205,9 +323,9 @@ function my_train_unbatched!(
 
   println("my_train_unbatched!")
   if g isa AbstractMatrix && SimpleChains.static_size(g, static(2)) == 1
-    gpb = preserve_buffer(g)
-    gv = PtrArray(pointer(g), (length(p),))
-    GC.@preserve gpb my_train_unbatched!(gv, p, _chn, X, opt, t)
+    gpb = SimpleChains.preserve_buffer(g)
+    gv = SimpleChains.PtrArray(pointer(g), (length(p),))
+    GC.@preserve gpb my_train_unbatched!(gv, p, _chn, X, Y, opt, t) #modified by addding Y
     return p
   end
 
@@ -250,6 +368,29 @@ end
 
 
 
+function my_train_unbatched_core!(
+  c::SimpleChains.Chain,
+  pu::Ptr{UInt8},
+  g,
+  pX,
+  p,
+  opt,
+  iters::Int,
+  mpt
+)
+  println("my_train_unbatched_core!")
+  chn = SimpleChains.getchain(c)
+  @unpack layers = chn
+  pen = SimpleChains.getpenalty(c)
+  sx = SimpleChains.static_size(pX)
+  optbuffer, pm = SimpleChains.optmemory(opt, p, pu)
+  GC.@preserve p g begin
+    for i ∈ 1:iters
+      println("my_train_unbatched_core! ", i)
+      my_update!(g, opt, pX, layers, pen, sx, p, pm, optbuffer, mpt)
+    end
+  end
+end
 
 
 
@@ -286,8 +427,8 @@ n = length(ytrain1)
 
 
 # Reduce the dataset to the selected examples
-xtrain4 = xtrain4[:, :, :, 1:2:2000]
-ytrain1 = ytrain1[1:2:2000]
+xtrain4 = xtrain4[:, :, :, 1:2:200]
+ytrain1 = ytrain1[1:2:200]
 
 # Print the size of the reduced dataset
 println("Size of reduced dataset: $(size(xtrain4, 4)) examples")
@@ -306,7 +447,7 @@ end
 # Print examples in ytest1 that are outside the range of 0 to 9
 test_out_of_range = findall(x -> !(1 <= x <= 10), ytest1)
 if !isempty(test_out_of_range)
-    println("Examples in ytest1 that are outside the range of 1 to 10:")
+    println("Examples in ytest1 that are outside the range of 1 to 10:")ch
     for i in test_out_of_range
         println("ytest1[$i] = $(ytest1[i])")
     end
@@ -320,8 +461,8 @@ loss_fn = MulticlassHingeLoss(ytrain1)
 println("loss")
 
 # Add the loss function to the model
-lenetloss = SimpleChains.add_loss(lenet, LogitCrossEntropyLoss(ytrain1));
-#lenetloss = SimpleChains.add_loss(lenet, loss_fn)
+#lenetloss = SimpleChains.add_loss(lenet, LogitCrossEntropyLoss(ytrain1));
+lenetloss = SimpleChains.add_loss(lenet, loss_fn)
 
 println("lenetloss")
 # Initialize the parameters of the model

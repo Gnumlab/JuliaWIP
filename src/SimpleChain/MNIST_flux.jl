@@ -16,7 +16,7 @@ img_size = Base.front(size(xtrain))
 xtest, ytest = get_data(:test)
 
 # Reduce the dataset to the selected examples
-n_examples = 8000
+n_examples = 3000
 xtrain = xtrain[:, :, :, 1:1:n_examples]
 ytrain = ytrain[1:1:n_examples]
 
