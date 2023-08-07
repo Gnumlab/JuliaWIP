@@ -4,6 +4,7 @@
 # the performance after compilation has been performed.
 
 import MLDatasets
+import Random
 
 # Get MNIST data
 function get_data(split)
@@ -16,9 +17,17 @@ img_size = Base.front(size(xtrain))
 xtest, ytest = get_data(:test)
 
 # Reduce the dataset to the selected examples
-n_examples = 3000
-xtrain = xtrain[:, :, :, 1:1:n_examples]
-ytrain = ytrain[1:1:n_examples]
+#n_examples = 3000
+#xtrain = xtrain[:, :, :, 1:1:n_examples]
+#ytrain = ytrain[1:1:n_examples]
+
+
+n_examples = 500
+indices = Random.randperm(size(xtrain, 4))[1:n_examples]
+xtrain = xtrain[:, :, :, indices]
+ytrain = ytrain[indices]
+
+
 
 # Training parameters
 num_image_classes = 10
@@ -112,6 +121,7 @@ begin
     for (x, y) in train_loader
         x = device(x)
         y = device(y)
+        #println(model(x))
 
         loss_val = loss(model(x), y)
         #println(model(x), " --- ", y, " ------- ", typeof(model(x)), " --- ", typeof(y))
@@ -131,7 +141,7 @@ begin
           min = loss_val
         end
     end
-    println(max, " ", min, " ", count, " ", count2)
+    #println(max, " ", min, " ", count, " ", count2)
     return actual_num_non_zero_loss_data
   end
 
@@ -150,9 +160,10 @@ begin
     
     actual_num_non_zero_loss_data = 0
     for epoch = 1:num_epochs
-        @time actual_num_non_zero_loss_data = fill_non_zero_loss_data(model, train_loader)
+        actual_num_non_zero_loss_data = fill_non_zero_loss_data(model, train_loader)
 
         if actual_num_non_zero_loss_data == 0
+          println(epoch)
           return
         end
 #        if actual_num_non_zero_loss_data == 0
@@ -171,7 +182,7 @@ begin
         
         non_zero_loss_loader = DataLoader((x_batch, y_batch), batchsize=batchsize, shuffle=true)
 
-        @time do_gradient(model, ps, non_zero_loss_loader, opt)
+        do_gradient(model, ps, non_zero_loss_loader, opt)
         
     end
   end
@@ -216,7 +227,7 @@ begin
   function train!(model, train_loader, opt)
     ps = Flux.params(model)
     for _ = 1:num_epochs
-      @time for (x, y) in train_loader
+      for (x, y) in train_loader
         x = device(x)
         y = device(y)
         gs = Flux.gradient(ps) do
@@ -250,10 +261,10 @@ begin
   
   println("\n\n\n============================== MY FAST TRAIN ==============================")
   for run = 1:2
-    println("Flux my_train! #$run")
+    println("\n\n\n\n\nFlux my_train! #$run")
     @time "  create model" model = LeNet5()
     opt = ADAM(learning_rate)
-    @time "  ======================================== TRAIN $num_epochs epochs" my_fast_train!(model, train_loader, opt)
+    @time "  ========================================\n TRAIN $num_epochs epochs" my_fast_train!(model, train_loader, opt)
     @time "  compute training loss" train_acc, train_loss =
       eval_loss_accuracy(test_loader, model, device)
     display_loss(train_acc, train_loss)
@@ -264,10 +275,10 @@ begin
   
     println("\n\n\n============================== TRAIN ==============================")
   for run = 1:2
-    println("Flux train! #$run")
+    println("\n\n\n\n\nFlux train! #$run")
     @time "  create model" model = LeNet5()
     opt = ADAM(learning_rate)
-    @time " ======================================== TRAIN $num_epochs epochs" train!(model, train_loader, opt)
+    @time " ========================================\n TRAIN $num_epochs epochs" train!(model, train_loader, opt)
     @time "  compute training loss" train_acc, train_loss =
       eval_loss_accuracy(test_loader, model, device)
     display_loss(train_acc, train_loss)
