@@ -4,6 +4,11 @@ using NNlib
 using Random, Statistics
 using Parameters: @unpack
 using Flux
+using Flux: onehotbatch, onecold
+using Flux.Losses: logitcrossentropy
+using Flux.Losses: hinge_loss
+using Flux.Data: DataLoader
+
 
 struct MulticlassHingeLoss{T<:AbstractVector{<:Integer}} <: SimpleChains.AbstractLoss{T}
     targets::T
@@ -175,17 +180,17 @@ function good_my_update!(
   optbuffer,
   _
 ) where {T,N}
-  println("good_my_update!")
+  #println("good_my_update!")
 
   GC.@preserve g p SimpleChains.chain_valgrad_entry!(pointer(g), Xp, layers, pointer(p), pm)
-  println("good_my_update!")
+  #println("good_my_update!")
 
   SimpleChains.apply_penalty!(g, pen, p, sx)
-  println("good_my_update!")
+  #println("good_my_update!")
 
-  println("good_my_update!")
+  #println("good_my_update!")
   gmul = SimpleChains.loss_multiplier(last(layers), SimpleChains.static_size(Xp, static(N)), T)
-  println("good_my_update! before update")
+  #println("good_my_update! before update")
   SimpleChains.update!(opt, optbuffer, p, g, gmul)
 end
 
@@ -200,15 +205,13 @@ function single_train_unbatched_core!(
   pu::Ptr{UInt8},
   g,
   pX,
-  pY, #added code
   p,
   opt,
-  mpt, 
-  X
+  mpt
 )
 
 
-  println("single_train_unbatched_core!")
+  #println("single_train_unbatched_core!")
 
   chn = SimpleChains.getchain(model)  # Assume SimpleChains.Chain is equivalent to Flux.Chain
   @unpack layers = chn
@@ -216,12 +219,14 @@ function single_train_unbatched_core!(
   sx = SimpleChains.static_size(pX)
   optbuffer, pm = SimpleChains.optmemory(opt, p, pu)
   GC.@preserve p g begin
-    println("before update")
+    #println("before update")
 #      good_my_update!(g, opt, pX1, layers, pen, sx1, p, pm, optbuffer, mpt) 
     good_my_update!(g, opt, pX, layers, pen, sx, p, pm, optbuffer, pu) 
+    #SimpleChains.update!(g, opt, pX, layers, pen, sx, p, pm, optbuffer, mpt) 
     
   end
 end
+using StaticArrays  # Make sure StaticArrays is imported
 
 function full_train_unbatched_core!(
   model::SimpleChains.Chain,
@@ -231,52 +236,63 @@ function full_train_unbatched_core!(
   pY, #added code
   p,
   opt,
-  iters::Int,
-  mpt, 
-  X
+  iters::Int
 )
-
-  max_possible_data = 10000
-  non_zero_loss_data = similar(X, Float32, 28, 28, 1, max_possible_data)
 
   chn = SimpleChains.getchain(model)  # Assume SimpleChains.Chain is equivalent to Flux.Chain
   @unpack layers = chn
-  pen = SimpleChains.getpenalty(model)  # SimpleChains.Assuming this function extracts penalty if any
-  sx = SimpleChains.static_size(pX)
-  optbuffer, pm = SimpleChains.optmemory(opt, p, pu)
+  #pen = SimpleChains.getpenalty(model)  # SimpleChains.Assuming this function extracts penalty if any
+  #sx = SimpleChains.static_size(pX)
+  #optbuffer, pm = SimpleChains.optmemory(opt, p, pu)
   GC.@preserve p g begin
     for i ∈ 1:iters   #iters are actually the number of epochs 
-      println("full_my_train_unbatched_core! iteration: ", i)
+      #println("full_my_train_unbatched_core! iteration: ", i)
       #SimpleChains.valgrad!(g, model, pX, p)
-
 
       actual_num_non_zero_loss_data = 0
       
-      for i in eachindex(pY)   #unefficient but working cycle
-        x = X[i]
-        y = pY[i]        
-        #SimpleChains.valgrad!(g, model, pX, p) do
-        ŷ = model(X, p)  # SimpleChains: need evaluate function that evaluetes chn on input x  
-        loss_val = Flux.Losses.hinge_loss(ŷ, y)
-        #loss_val = Flux.Losses.logitcrossentropy(ŷ, y)
-        println(loss_val)
-        if loss_val < 1.0
+      #for i in eachindex(pY)   #unefficient but working cycle
+      # x = X[i]
+      # y = pY[i]   
+      pred = model1(pX, p)
+      #n_cols = size(pX, 4)
+      #println(size(pX))
+      #println("Number of examples = $n_cols")
+      #ypred = pred[1]
+      #println(size(ypred), ypred, " \t\t  ", size(pY), pY[1])
+      #ypredall = lenet(x, p)
+      @inbounds for i in 1:n_examples
+        #m = x[:, :, :, i]
+        #m1 = reshape(m, 28, 28, 1, 1)
+        #ypred = pred[i]
+        #println(size(ypred), ypred, "   ", size(pY), pY[i])
+        #println(size(y), "  ", y[i])
+        loss_val = Flux.Losses.logitbinarycrossentropy(pred[i], pY[i])
+        #loss_val = Flux.Losses.hinge_loss(ypred, pY[i])
+        if loss_val >= 0.2
           actual_num_non_zero_loss_data += 1
-          non_zero_loss_data[:, :, :, actual_num_non_zero_loss_data] .= x
+          #println(size(non_zero_loss_data[:, :, :, actual_num_non_zero_loss_data]), "            ", size(pX[:, :, :, i]))
+          @inbounds  non_zero_loss_data[:, :, :, actual_num_non_zero_loss_data] .=  @view pX[:, :, :, i:i]
         end
       end
-    
+
       # Remove unnecessary computations
-      println(actual_num_non_zero_loss_data)
-      non_zero_loss_data1 =  non_zero_loss_data[:, :, :, 1:actual_num_non_zero_loss_data]
+      println("\t\tnumber non zero = $actual_num_non_zero_loss_data of $n_examples")
+      if actual_num_non_zero_loss_data == 0
+        return
+      end
+      #non_zero_loss_data1 =  non_zero_loss_data[:, :, :, 1:actual_num_non_zero_loss_data]
       
 
       # Create an array `pX` to store the non-zero examples
-      pX1 = SimpleChains.maybe_static_size_arg(chn.inputdim, non_zero_loss_data1)   
+
+      pX1 = @view non_zero_loss_data[:, :, :, 1:actual_num_non_zero_loss_data]
+      # Assign the slices to the dynamic array
+      
 
       optoff = SimpleChains.optmemsize(opt, p)
       @unpack layers = chn
-      T = Base.promote_eltype(p, non_zero_loss_data1)
+      T = Base.promote_eltype(p, pX1)
       bytes_per_thread, total_bytes = SimpleChains.required_bytes(    
         Val{T}(),
         layers,
@@ -287,21 +303,34 @@ function full_train_unbatched_core!(
       )
    
 
-      println("call single ")
+      #println("call single ")
 
-#      good_my_update!(g, opt, pX1, layers, pen, sx1, p, pm, optbuffer, mpt) 
-      GC.@preserve X begin
+      #=
+      @time GC.@preserve pX1 begin
+        SimpleChains.with_memory(
+          SimpleChains.train_unbatched_core!,
+          model,
+          total_bytes,
+          g,
+          pX1,
+          p,
+          opt,
+          1,
+          bytes_per_thread
+          )
+      end
+      =#
+       #good_my_update!(g, opt, pX1, layers, pen, sx1, p, pm, optbuffer, mpt) 
+      @time "\tUpdate " GC.@preserve pX begin
         SimpleChains.with_memory(
           single_train_unbatched_core!,
           model,
           total_bytes,
           g,
           pX1,
-          pY,  #added code for full_train_unbatched_core
           p,
           opt,
-          bytes_per_thread, 
-          X
+          bytes_per_thread
         )
       end
     end
@@ -321,7 +350,7 @@ function my_train_unbatched!(
   t
 )
 
-  println("my_train_unbatched!")
+  #println("my_train_unbatched!")
   if g isa AbstractMatrix && SimpleChains.static_size(g, static(2)) == 1
     gpb = SimpleChains.preserve_buffer(g)
     gv = SimpleChains.PtrArray(pointer(g), (length(p),))
@@ -332,7 +361,7 @@ function my_train_unbatched!(
   chn = SimpleChains.getchain(_chn)
   pX = SimpleChains.maybe_static_size_arg(chn.inputdim, X)
 
-  pY = Y#SimpleChains.maybe_static_size_arg(chn.inputdim, Y)  #added code
+  #pY = Y#SimpleChains.maybe_static_size_arg(chn.inputdim, Y)  #added code
 
   optoff = SimpleChains.optmemsize(opt, p)
   @unpack layers = chn
@@ -341,12 +370,13 @@ function my_train_unbatched!(
     Val{T}(),
     layers,
     SimpleChains.static_size(pX),
-    optoff,
+    2optoff,
     static(0),
     SimpleChains.static_size(g, static(2))
   )
-  println("my_train_unbatched! calling my_train_unbatched_core!")
+  #println("my_train_unbatched! calling my_train_unbatched_core!")
 
+  
   GC.@preserve X begin
     SimpleChains.with_memory(
       full_train_unbatched_core!,
@@ -354,12 +384,10 @@ function my_train_unbatched!(
       total_bytes,
       g,
       pX,
-      pY,  #added code for full_train_unbatched_core
+      Y,  #added code for full_train_unbatched_core
       p,
       opt,
-      t,
-      bytes_per_thread, 
-      X
+      t
     )
   end
   p
@@ -378,7 +406,7 @@ function my_train_unbatched_core!(
   iters::Int,
   mpt
 )
-  println("my_train_unbatched_core!")
+  #println("my_train_unbatched_core!")
   chn = SimpleChains.getchain(c)
   @unpack layers = chn
   pen = SimpleChains.getpenalty(c)
@@ -386,7 +414,7 @@ function my_train_unbatched_core!(
   optbuffer, pm = SimpleChains.optmemory(opt, p, pu)
   GC.@preserve p g begin
     for i ∈ 1:iters
-      println("my_train_unbatched_core! ", i)
+      #println("my_train_unbatched_core! ", i)
       my_update!(g, opt, pX, layers, pen, sx, p, pm, optbuffer, mpt)
     end
   end
@@ -397,17 +425,6 @@ end
 
 
 # Define the LeNet-5 architecture with multi-class output
-lenet = SimpleChain(
-  (static(28), static(28), static(1)),
-  SimpleChains.Conv(SimpleChains.relu, (5, 5), 6),
-  SimpleChains.MaxPool(2, 2),
-  SimpleChains.Conv(SimpleChains.relu, (5, 5), 16),
-  SimpleChains.MaxPool(2, 2),
-  Flatten(3),
-  TurboDense(SimpleChains.relu, 120),
-  TurboDense(SimpleChains.relu, 84),
-  TurboDense(identity, 10),
-)
 
 # Load the MNIST dataset
 xtrain3, ytrain0 = MLDatasets.MNIST.traindata(Float32)
@@ -417,8 +434,39 @@ xtest4 = reshape(xtest3, 28, 28, 1, :)
 ytrain1 = UInt32.(ytrain0 .+ 1)
 ytest1 = UInt32.(ytest0 .+ 1)
 
+n_examples = 2000
+# Reduce the dataset to the selected examples
+indices = Random.randperm(size(xtrain4, 4))[1:n_examples]
+xtrain4 = xtrain4[:, :, :, 1:1:n_examples]
+ytrain1 = ytrain1[1:1:n_examples]
+
+max_possible_data = 10000
+non_zero_loss_data = similar(xtrain4, Float32, 28, 28, 1, n_examples)
+#non_zero_loss_data = SMatrix{28, 28, Float32, n_examples}(undef)
+
+pred = similar(ytrain1, Float32, 10, n_examples)
 
 
+
+function LeNet5()
+  return SimpleChain(
+  (static(28), static(28), static(1)),
+  SimpleChains.Conv(SimpleChains.relu, (5, 5), 6),
+  SimpleChains.MaxPool(2, 2),
+  SimpleChains.Conv(SimpleChains.relu, (5, 5), 16),
+  SimpleChains.MaxPool(2, 2),
+  Flatten(3),
+  TurboDense(SimpleChains.relu, 120),
+  TurboDense(SimpleChains.relu, 84),
+  TurboDense(identity, 10)
+  ) 
+end
+
+
+using StaticArrays
+
+# Declare a static array with 10 floats
+#ypred = SVector{10, Float32}(undef)
 # Set the random seed for reproducibility
 Random.seed!(1234)
 
@@ -426,9 +474,7 @@ Random.seed!(1234)
 n = length(ytrain1)
 
 
-# Reduce the dataset to the selected examples
-xtrain4 = xtrain4[:, :, :, 1:2:200]
-ytrain1 = ytrain1[1:2:200]
+
 
 # Print the size of the reduced dataset
 println("Size of reduced dataset: $(size(xtrain4, 4)) examples")
@@ -456,34 +502,61 @@ else
 end
 
 # Define the loss function for the model and input data
-loss_fn = MulticlassHingeLoss(ytrain1)
+#loss_fn = MulticlassHingeLoss(ytrain1)
 
-println("loss")
+#println("loss")
 
-# Add the loss function to the model
-#lenetloss = SimpleChains.add_loss(lenet, LogitCrossEntropyLoss(ytrain1));
-lenetloss = SimpleChains.add_loss(lenet, loss_fn)
-
-println("lenetloss")
-# Initialize the parameters of the model
-p = SimpleChains.init_params(lenet, size(xtrain4))
-G = SimpleChains.alloc_threaded_grad(lenetloss);
+# Add the loss function to the model3)
+#lenetloss = SimpleChains.add_loss(lenet, loss_fn)
 
 
 
 println("ini params")
 
-#SimpleChains.valgrad!(G, lenetloss, xtrain4, p)
+
 
 println("starting training")
+model1 = LeNet5()
+for iter in 3:3
+  println("Iteration n $iter")
+  for i in 1:3
+    lenet = LeNet5()
+    # Initialize the parameters of the model
+    lenetloss = SimpleChains.add_loss(lenet, LogitCrossEntropyLoss(ytrain1))
+    p = SimpleChains.init_params(lenet, size(xtrain4))
+    G = SimpleChains.alloc_threaded_grad(lenetloss);
+    model1 = SimpleChains.remove_loss(lenet)
 
-
-@time my_train_unbatched!(G, p, lenetloss, xtrain4, ytrain1, SimpleChains.ADAM(3e-4), 3);
-#@time SimpleChains.train_unbatched!(G, p, lenetloss, xtrain4, SimpleChains.ADAM(3e-4), 1);
-#SimpleChains.accuracy_and_loss(lenetloss, xtrain4, p)
-SimpleChains.accuracy_and_loss(lenetloss, xtest4, ytest1, p)
-
+    @time my_train_unbatched!(G, p, lenetloss, xtrain4, ytrain1, SimpleChains.ADAM(3e-4), iter);
+    #@time SimpleChains.train_unbatched!(G, p, lenetloss, xtrain4, SimpleChains.ADAM(3e-4), 1);
+    #SimpleChains.accuracy_and_loss(lenetloss, xtrain4, p)
+    #println(SimpleChains.accuracy_and_loss(lenetloss, xtest4,i,:
+  end
+  println("\n\n\n\n\n")
 #lenet(xtest4, p)
+end
+
+
+for iter in 34:3
+  println("Iteration n $iter")
+  for i in 1:3
+
+    #@time SimpleChains.train_unbatched!(G, p, lenetloss, xtrain4, SimpleChains.ADAM(3e-4), 1);
+    #SimpleChains.accuracy_and_loss(lenetloss, xtrain4, p)
+    #println(SimpleChains.accuracy_and_loss(lenetloss, xtest4, ytest1, p))
+
+    # Initialize the parameters of the model
+    lenet1 = LeNet5()
+    lenetloss1 = SimpleChains.add_loss(lenet1, LogitCrossEntropyLoss(ytrain1))
+    p = SimpleChains.init_params(lenet1, size(xtrain4))
+    G = SimpleChains.alloc_threaded_grad(lenetloss1);
+
+    @time SimpleChains.train_unbatched!(G, p, lenetloss1, xtrain4, SimpleChains.ADAM(3e-4), iter);
+    #println(SimpleChains.accuracy_and_loss(lenetloss_base, xtrain4, p_base))
+  end
+  println("\n\n\n\n\n")
+#lenet(xtest4, p)
+end
 
 
 #SimpleChains.accuracy_and_loss(lenetloss, xtrain4, p)
