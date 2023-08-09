@@ -277,7 +277,7 @@ function full_train_unbatched_core!(
       end
 
       # Remove unnecessary computations
-      println("\t\tnumber non zero = $actual_num_non_zero_loss_data of $n_examples")
+      #println("\t\tnumber non zero = $actual_num_non_zero_loss_data of $n_examples")
       if actual_num_non_zero_loss_data == 0
         return
       end
@@ -288,15 +288,16 @@ function full_train_unbatched_core!(
 
       pX1 = @view non_zero_loss_data[:, :, :, 1:actual_num_non_zero_loss_data]
       # Assign the slices to the dynamic array
-      
+      pX2 = SimpleChains.maybe_static_size_arg(chn.inputdim, pX1)
+
 
       optoff = SimpleChains.optmemsize(opt, p)
       @unpack layers = chn
-      T = Base.promote_eltype(p, pX1)
+      T = Base.promote_eltype(p, pX2)
       bytes_per_thread, total_bytes = SimpleChains.required_bytes(    
         Val{T}(),
         layers,
-        SimpleChains.static_size(pX1),
+        SimpleChains.static_size(pX2),
         optoff,
         static(0),
         SimpleChains.static_size(g, static(2))
@@ -321,13 +322,13 @@ function full_train_unbatched_core!(
       end
       =#
        #good_my_update!(g, opt, pX1, layers, pen, sx1, p, pm, optbuffer, mpt) 
-      @time "\tUpdate " GC.@preserve pX begin
+      GC.@preserve pX begin
         SimpleChains.with_memory(
           single_train_unbatched_core!,
           model,
           total_bytes,
           g,
-          pX1,
+          pX2,
           p,
           opt,
           bytes_per_thread
@@ -434,7 +435,7 @@ xtest4 = reshape(xtest3, 28, 28, 1, :)
 ytrain1 = UInt32.(ytrain0 .+ 1)
 ytest1 = UInt32.(ytest0 .+ 1)
 
-n_examples = 2000
+n_examples = 5000
 # Reduce the dataset to the selected examples
 indices = Random.randperm(size(xtrain4, 4))[1:n_examples]
 xtrain4 = xtrain4[:, :, :, 1:1:n_examples]
@@ -515,11 +516,11 @@ println("ini params")
 
 
 
-println("starting training")
+println("TRAINING WITH $n_examples EXAMPLE\n")
 model1 = LeNet5()
-for iter in 3:3
+for iter in 1:10
   println("Iteration n $iter")
-  for i in 1:3
+  for i in 1:10
     lenet = LeNet5()
     # Initialize the parameters of the model
     lenetloss = SimpleChains.add_loss(lenet, LogitCrossEntropyLoss(ytrain1))
@@ -536,10 +537,11 @@ for iter in 3:3
 #lenet(xtest4, p)
 end
 
+println("STANDARD SIMPLECHAINS\n")
 
-for iter in 34:3
+for iter in 1:10
   println("Iteration n $iter")
-  for i in 1:3
+  for i in 1:10
 
     #@time SimpleChains.train_unbatched!(G, p, lenetloss, xtrain4, SimpleChains.ADAM(3e-4), 1);
     #SimpleChains.accuracy_and_loss(lenetloss, xtrain4, p)
