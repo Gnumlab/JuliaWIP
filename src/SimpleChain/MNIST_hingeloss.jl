@@ -267,9 +267,9 @@ function full_train_unbatched_core!(
         #ypred = pred[i]
         #println(size(ypred), ypred, "   ", size(pY), pY[i])
         #println(size(y), "  ", y[i])
-        loss_val = Flux.Losses.logitbinarycrossentropy(pred[i], pY[i])
-        #loss_val = Flux.Losses.hinge_loss(ypred, pY[i])
-        if loss_val >= 0.2
+        #loss_val = Flux.Losses.logitbinarycrossentropy(pred[i], pY[i])
+        loss_val = Flux.Losses.hinge_loss(pred[i], pY[i])
+        if loss_val > 0.0
           actual_num_non_zero_loss_data += 1
           #println(size(non_zero_loss_data[:, :, :, actual_num_non_zero_loss_data]), "            ", size(pX[:, :, :, i]))
           @inbounds  non_zero_loss_data[:, :, :, actual_num_non_zero_loss_data] .=  @view pX[:, :, :, i:i]
@@ -277,7 +277,7 @@ function full_train_unbatched_core!(
       end
 
       # Remove unnecessary computations
-      #println("\t\tnumber non zero = $actual_num_non_zero_loss_data of $n_examples")
+      println("\t\tnumber non zero = $actual_num_non_zero_loss_data of $n_examples (", actual_num_non_zero_loss_data/(n_examples*1.0), "%).")
       if actual_num_non_zero_loss_data == 0
         return
       end
@@ -435,11 +435,11 @@ xtest4 = reshape(xtest3, 28, 28, 1, :)
 ytrain1 = UInt32.(ytrain0 .+ 1)
 ytest1 = UInt32.(ytest0 .+ 1)
 
-n_examples = 5000
+n_examples = 1000
 # Reduce the dataset to the selected examples
 indices = Random.randperm(size(xtrain4, 4))[1:n_examples]
-xtrain4 = xtrain4[:, :, :, 1:1:n_examples]
-ytrain1 = ytrain1[1:1:n_examples]
+xtrain4 = xtrain4[:, :, :, indices]#xtrain4[:, :, :, 1:1:n_examples]
+ytrain1 = ytrain1[indices]#[1:1:n_examples]
 
 max_possible_data = 10000
 non_zero_loss_data = similar(xtrain4, Float32, 28, 28, 1, n_examples)
@@ -503,7 +503,7 @@ else
 end
 
 # Define the loss function for the model and input data
-#loss_fn = MulticlassHingeLoss(ytrain1)
+loss_fn = MulticlassHingeLoss(ytrain1)
 
 #println("loss")
 
@@ -518,19 +518,19 @@ println("ini params")
 
 println("TRAINING WITH $n_examples EXAMPLE\n")
 model1 = LeNet5()
-for iter in 1:10
+for iter in 1:3
   println("Iteration n $iter")
-  for i in 1:10
+  for i in 1:1
     lenet = LeNet5()
     # Initialize the parameters of the model
-    lenetloss = SimpleChains.add_loss(lenet, LogitCrossEntropyLoss(ytrain1))
+    lenetloss = SimpleChains.add_loss(lenet, loss_fn)
     p = SimpleChains.init_params(lenet, size(xtrain4))
     G = SimpleChains.alloc_threaded_grad(lenetloss);
     model1 = SimpleChains.remove_loss(lenet)
 
     @time my_train_unbatched!(G, p, lenetloss, xtrain4, ytrain1, SimpleChains.ADAM(3e-4), iter);
     #@time SimpleChains.train_unbatched!(G, p, lenetloss, xtrain4, SimpleChains.ADAM(3e-4), 1);
-    #SimpleChains.accuracy_and_loss(lenetloss, xtrain4, p)
+    println(SimpleChains.accuracy_and_loss(lenetloss, xtrain4, p))
     #println(SimpleChains.accuracy_and_loss(lenetloss, xtest4,i,:
   end
   println("\n\n\n\n\n")
@@ -541,7 +541,7 @@ println("STANDARD SIMPLECHAINS\n")
 
 for iter in 1:10
   println("Iteration n $iter")
-  for i in 1:10
+  for i in 1:1
 
     #@time SimpleChains.train_unbatched!(G, p, lenetloss, xtrain4, SimpleChains.ADAM(3e-4), 1);
     #SimpleChains.accuracy_and_loss(lenetloss, xtrain4, p)
@@ -553,8 +553,11 @@ for iter in 1:10
     p = SimpleChains.init_params(lenet1, size(xtrain4))
     G = SimpleChains.alloc_threaded_grad(lenetloss1);
 
+    SimpleChains.valgrad!(G, lenetloss1, xtrain4, p)
     @time SimpleChains.train_unbatched!(G, p, lenetloss1, xtrain4, SimpleChains.ADAM(3e-4), iter);
-    #println(SimpleChains.accuracy_and_loss(lenetloss_base, xtrain4, p_base))
+    #@time SimpleChains.train_batched!(G, p, lenetloss1, xtrain4, SimpleChains.ADAM(3e-4), iter);
+    println(SimpleChains.accuracy_and_loss(lenetloss1, xtrain4, p))
+    println(SimpleChains.accuracy_and_loss(lenetloss1, xtest4, ytest1, p))
   end
   println("\n\n\n\n\n")
 #lenet(xtest4, p)
