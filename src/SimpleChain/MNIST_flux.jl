@@ -22,22 +22,25 @@ xtest, ytest = get_data(:test)
 #ytrain = ytrain[1:1:n_examples]
 
 
-n_examples = 500
-indices = Random.randperm(size(xtrain, 4))[1:n_examples]
+n_examples = 1000
+indices = Random.randperm(size(xtrain, 4))[1:10000]
 xtrain = xtrain[:, :, :, indices]
 ytrain = ytrain[indices]
+
+xtrain = xtrain[:, :, :, 1:1:n_examples]
+ytrain = ytrain[1:1:n_examples]
 
 
 
 # Training parameters
 num_image_classes = 10
 learning_rate = 3e-4
-num_epochs = 10
+
 
 using Printf
 
 function display_loss(accuracy, loss)
-  @printf("    training accuracy %.2f, loss %.4f\n", 100 * accuracy, loss)
+  @printf("     accuracy %.2f, loss %.4f\n", 100 * accuracy, loss)
 end
 
 
@@ -91,6 +94,7 @@ begin
 
   loss(ŷ, y) = logitcrossentropy(ŷ, y)
   #loss(ŷ, y) = hinge_loss(ŷ, y)
+  
   function eval_loss_accuracy(loader, model, device)
     l = 0.0f0
     acc = 0
@@ -126,7 +130,7 @@ begin
         loss_val = loss(model(x), y)
         #println(model(x), " --- ", y, " ------- ", typeof(model(x)), " --- ", typeof(y))
         count2 += 1
-        if loss_val > 0.05
+        if loss_val > 0.9
             actual_num_non_zero_loss_data += 1
             non_zero_loss_data[actual_num_non_zero_loss_data] = (x, y)
             count += 1
@@ -140,6 +144,33 @@ begin
         if loss_val < min
           min = loss_val
         end
+    end
+    #println(max, " ", min, " ", count, " ", count2)
+    return actual_num_non_zero_loss_data
+  end
+
+  function fill_random_data(model, train_loader, prob)
+    actual_num_non_zero_loss_data = 0
+    count = 0
+    count2 = 0
+    max = 0
+    min = 100
+    for (x, y) in train_loader
+        x = device(x)
+        y = device(y)
+        #println(model(x))
+
+        rand_num = rand()
+        #loss_val = loss(model(x), y)
+        #println(model(x), " --- ", y, " ------- ", typeof(model(x)), " --- ", typeof(y))
+        count2 += 1
+        if rand_num < prob
+            actual_num_non_zero_loss_data += 1
+            non_zero_loss_data[actual_num_non_zero_loss_data] = (x, y)
+            count += 1
+        end
+
+
     end
     #println(max, " ", min, " ", count, " ", count2)
     return actual_num_non_zero_loss_data
@@ -159,9 +190,14 @@ begin
     ps = Flux.params(model)
     
     actual_num_non_zero_loss_data = 0
+    prob_vector = [1.0, 0.71, 0.50, 0.23, 0.15, 0.17, 0.09, 0.1, 0.105, 0.06]
     for epoch = 1:num_epochs
         actual_num_non_zero_loss_data = fill_non_zero_loss_data(model, train_loader)
-
+        prob = 1 - 0.1 * (epoch - 1)
+        prob = prob_vector[epoch]
+        println(prob)
+        #actual_num_non_zero_loss_data = fill_random_data(model, train_loader, prob)
+      println("\t\tnumber non zero = $actual_num_non_zero_loss_data of $n_examples (", actual_num_non_zero_loss_data/(n_examples*1.0), "%).")
         if actual_num_non_zero_loss_data == 0
           println(epoch)
           return
@@ -240,6 +276,7 @@ begin
   end
 
 
+num_epochs = 4
 
 
   println("\n\n\n============================== MY TRAIN ==============================")
@@ -266,10 +303,10 @@ begin
     opt = ADAM(learning_rate)
     @time "  ========================================\n TRAIN $num_epochs epochs" my_fast_train!(model, train_loader, opt)
     @time "  compute training loss" train_acc, train_loss =
-      eval_loss_accuracy(test_loader, model, device)
+      eval_loss_accuracy(train_loader, model, device)
     display_loss(train_acc, train_loss)
     @time "  compute test loss" test_acc, test_loss =
-      eval_loss_accuracy(train_loader, model, device)
+      eval_loss_accuracy(test_loader, model, device)
     display_loss(test_acc, test_loss)
   end
   
@@ -280,10 +317,10 @@ begin
     opt = ADAM(learning_rate)
     @time " ========================================\n TRAIN $num_epochs epochs" train!(model, train_loader, opt)
     @time "  compute training loss" train_acc, train_loss =
-      eval_loss_accuracy(test_loader, model, device)
+      eval_loss_accuracy(train_loader, model, device)
     display_loss(train_acc, train_loss)
     @time "  compute test loss" test_acc, test_loss =
-      eval_loss_accuracy(train_loader, model, device)
+      eval_loss_accuracy(test_loader, model, device)
     display_loss(test_acc, test_loss)
   end
   

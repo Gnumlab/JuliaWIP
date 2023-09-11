@@ -286,7 +286,7 @@ n = length(ytrain1)
 
 
 # Print the size of the reduced dataset
-println("Size of reduced dataset: $(size(xtrain4, 4)) examples")
+println("Size of reduced dataset: $(size(5xtrain4, 4)) examples")
 
 # Print examples in ytrain1 that are outside the range of 0 to 9
 train_out_of_range = findall(x -> !(1 <= x <= 10), ytrain1)
@@ -362,7 +362,7 @@ for iter in 5:5
     p = SimpleChains.init_params(lenet1, size(xtrain4))
     G = SimpleChains.alloc_threaded_grad(lenetloss1);
 
-    @time SimpleChains.train_unbatched!(G, p, lenetloss1, xtrain4, SimpleChains.ADAM(3e-4), iter);
+    @time SimpleChains.train_batched!(G, p, lenetloss1, xtrain4, SimpleChains.ADAM(3e-4), iter);
     println(SimpleChains.accuracy_and_loss(lenetloss1, xtest4, p))
   end
   println("\n\n\n\n\n")
