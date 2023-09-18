@@ -22,7 +22,7 @@ xtest, ytest = get_data(:test)
 #ytrain = ytrain[1:1:n_examples]
 
 
-n_examples = 1000
+n_examples = 3000
 indices = Random.randperm(size(xtrain, 4))[1:10000]
 xtrain = xtrain[:, :, :, indices]
 ytrain = ytrain[indices]
@@ -130,7 +130,7 @@ begin
         loss_val = loss(model(x), y)
         #println(model(x), " --- ", y, " ------- ", typeof(model(x)), " --- ", typeof(y))
         count2 += 1
-        if loss_val > 0.9
+        if loss_val > 0.002
             actual_num_non_zero_loss_data += 1
             non_zero_loss_data[actual_num_non_zero_loss_data] = (x, y)
             count += 1
