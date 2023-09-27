@@ -466,7 +466,7 @@ function filtering_train(G, p, model, X, Y, opt, iter)
       Y1 = @view non_zero_loss_target[1:actual_num_non_zero_loss_data]
       loss_fn = MulticlassHingeLoss(Y1)
       loss_fn1 = LogitCrossEntropyLoss(Y1)
-      model = SimpleChains.add_loss(model_noloss, loss_fn1)
+      model = SimpleChains.add_loss(model_noloss, loss_fn)
       #@time my_train_unbatched!(G, p, model, X, ytrain1, SimpleChains.ADAM(3e-4), iter);
       SimpleChains.train_batched!(G, p, model, X1, opt, 1);
     end
@@ -605,7 +605,7 @@ for iter in 5:5
 
     # Initialize the parameters of the model
     lenet1 = LeNet5()
-    lenetloss1 = SimpleChains.add_loss(lenet1, loss_fn1)#LogitCrossEntropyLoss(ytrain1))
+    lenetloss1 = SimpleChains.add_loss(lenet1, loss_fn)#LogitCrossEntropyLoss(ytrain1))
     p = SimpleChains.init_params(lenet1, size(xtrain4))
     G = SimpleChains.alloc_threaded_grad(lenetloss1);
 
